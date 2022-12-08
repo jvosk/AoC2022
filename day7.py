@@ -1,102 +1,76 @@
 from textwrap import indent
-from typing import Generator
+from itertools import chain
+from typing import Iterable, Generator, Self
 
-# really just here for the type hinting
-class FSO: # FSO: FileSystemObject
-    @property
-    def name(self) -> str:
-        return self._name
-    
-    @property
-    def size(self) -> int:
-        return self._size
 
-class File(FSO):
+class File:
     def __init__(self, size: str, name: str) -> None:
-        self._size = int(size)
-        self._name = name
-    
+        self.size = int(size)
+        self.name = name
+
     def __repr__(self) -> str:
         return f"- {self.name} (file, size={self.size})"
 
-class Directory(FSO):
+
+class Directory:
     def __init__(self, name: str) -> None:
-        self._name = name
-        self.contents: dict[str, FSO] = {}
-    
-    def add(self, child: FSO) -> None:
-        self.contents[child.name] = child
-    
-    # couldn't figure out how to get the type hinting correct on this one
-    # for some reason can't type hint Generator[Directory, None, None]
+        self.name = name
+        self.contents: dict[str, File | Directory] = {}
+
     @property
-    def dirs(self) -> Generator[FSO, None, None]:
+    def dirs(self) -> Generator[Self, None, None]:  # type: ignore
         yield self
-        for gen in [child.dirs for child in self.contents.values() if type(child)==Directory]:
-            yield from gen
-    
+        yield from chain.from_iterable(
+            child.dirs for child in self.contents.values() if type(child) == Directory
+        )
+
     @property
-    def dir_sizes(self):
-        return (i.size for i in self.dirs)
-    
-    @property
-    def _size(self) -> int:
+    def size(self) -> int:
         return sum(child.size for child in self.contents.values())
-    
+
     def __repr__(self) -> str:
-        children = '\n'.join(indent(str(child), ' '*2)
-                             for child in self.contents.values())
+        children = "\n".join(
+            indent(str(child), " " * 2) for child in self.contents.values()
+        )
         return f"- {self.name} (dir)\n{children}"
+
 
 class Filesystem:
     def __init__(self) -> None:
-        self.root: Directory        = Directory("/")
-        self.head: list[Directory]  = [self.root] # (c/sh)ould be a doubly-linked list
-    
-    @property
-    def tail(self) -> Directory:
-        assert len(self.head)>0 # sanity check
-        return self.head[-1]
+        self.root = Directory("/")
+        self.head: list[Directory] = [self.root]
 
     def cd(self, name: str) -> None:
         match name:
-            case "/": # jump to root
+            case "/":  # jump to root
                 self.head = [self.root]
-            case "..": # up one
-                assert len(self.head)>1 # sanity check
+            case "..":  # up one
                 self.head.pop()
-            case _: # everything else is a cd-into-child
-                assert name in self.tail.contents.keys() # sanity check
-                self.head.append(self.tail.contents[name])
-    
+            case _:  # everything else is a cd-into-child
+                child = self.head[-1].contents[name]
+                assert type(child) == Directory
+                self.head.append(child)
+
     def __repr__(self) -> str:
         return str(self.root)
 
-def parse(lines: list[str]) -> Filesystem:
-    fs = Filesystem()
+
+def build(lines: Iterable[str], fs: Filesystem) -> Filesystem:
     for line in lines:
-        if line[0]=="$": # the line is a command, either `ls` or `cd`
-            match line[2:4]:
-                case "cd":
-                    fs.cd(line.split(" ")[-1])
-                case "ls":
-                    pass # falls through to the else block on next line
-                case _: # sanity check
-                    raise ValueError(f"command {line[2:]} not in (`ls`, `cd`)")
-        else: # the line is a result from an `ls` command
-            item = line.split(" ")
-            assert len(item)==2 # sanity check
-            left, right = item
-            match left:
-                case "dir":
-                    fs.tail.add(Directory(right))
-                case _:
-                    fs.tail.add(File(left, right))
+        if line[0:4] == "$ cd":
+            fs.cd(line[5:])
+        elif line[0] != "$":
+            child: File | Directory = (
+                Directory(data[1])
+                if (data := line.split(" "))[0] == "dir"
+                else File(*data)
+            )
+            fs.head[-1].contents[child.name] = child
     return fs
 
-with open("input7.txt") as f:
-    lines = [line.strip() for line in f]
-fs = parse(lines)
 
-print(sum(filter(lambda x: x <= 1e5,                    fs.root.dir_sizes))) # part 1
-print(min(filter(lambda x: x > fs.root.size - int(4e7), fs.root.dir_sizes))) # part 2
+with open("input7.txt") as f:
+    fs = build((line.strip() for line in f), Filesystem())
+
+print(sum(x.size for x in fs.root.dirs if x.size <= 1e5))  # type: ignore
+print(min(x.size for x in fs.root.dirs if x.size > fs.root.size - 4e7))  # type: ignore
